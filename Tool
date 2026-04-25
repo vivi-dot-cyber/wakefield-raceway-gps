@@ -1,0 +1,110 @@
+import csv
+import arcpy
+
+# User parameters (edit these paths for your machine)
+input_csv = r"C:\Users\vivia\OneDrive\Documents\GEOG_485\Lesson 4\WakefieldParkRaceway.csv"
+output_workspace = r"C:\Users\vivia\OneDrive\Documents\GEOG_485\Lesson 4"
+output_name = "wakefield_laps.shp"
+
+# keep every nth point (1 = keep all points)
+nth_point = 1
+
+
+# Environment setup
+arcpy.env.overwriteOutput = True
+spatial_ref = arcpy.SpatialReference(4326)  # WGS 1984
+
+
+# Create output feature class
+arcpy.management.CreateFeatureclass(
+    out_path=output_workspace,
+    out_name=output_name,
+    geometry_type="POLYLINE",
+    spatial_reference=spatial_ref
+)
+
+# Add Lap field (Short Integer)
+fc_path = fr"{output_workspace}\{output_name}"
+arcpy.management.AddField(
+    in_table=fc_path,
+    field_name="Lap",
+    field_type="SHORT"
+)
+
+
+# Read CSV and organize points by lap
+laps = {}  # {lap_number: [(lon, lat), (lon, lat), ...]}
+
+with open(input_csv, "r", newline="", encoding="utf-8") as f:
+    reader = csv.reader(f)
+
+    header = None
+
+    for row in reader:
+
+        # Skip empty rows
+        if not row:
+            continue
+
+        # Skip comment lines (# Lap 1: ..., # Session End)
+        if row[0].startswith("#"):
+            if "Session End" in row[0]:
+                break
+            continue
+
+        # Detect header row
+        if header is None:
+            header = row
+            lat_idx = header.index("Latitude")
+            lon_idx = header.index("Longitude")
+            lap_idx = header.index("Lap")
+            continue
+
+        # Skip malformed rows
+        if len(row) != len(header):
+            continue
+
+        # Extract values
+        try:
+            lat = float(row[lat_idx])
+            lon = float(row[lon_idx])
+            lap_num = int(row[lap_idx])
+        except:
+            continue
+
+        # Initialize lap list if needed
+        if lap_num not in laps:
+            laps[lap_num] = []
+
+        # Thinning logic
+        if nth_point == 1:
+            laps[lap_num].append((lon, lat))
+        else:
+            count = len(laps[lap_num])
+            if count == 0 or count % nth_point == 0:
+                laps[lap_num].append((lon, lat))
+
+
+# Build polylines and insert into shapefile
+fields = ["SHAPE@", "Lap"]
+
+with arcpy.da.InsertCursor(fc_path, fields) as cursor:
+    for lap_num in sorted(laps.keys()):
+        points = laps[lap_num]
+
+        # Skip laps with fewer than 2 points
+        if len(points) < 2:
+            continue
+
+        array = arcpy.Array()
+
+        for (x, y) in points:
+            array.add(arcpy.Point(x, y))
+
+        polyline = arcpy.Polyline(array, spatial_ref)
+        cursor.insertRow((polyline, lap_num))
+
+        array.removeAll()
+
+print("Polyline shapefile created successfully:")
+print(fc_path)
